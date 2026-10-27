@@ -15,7 +15,7 @@ from pyglet import shapes
 from pyglet.math import Mat4, Vec3
 from pyglet.window import key, mouse
 
-from . import fetch, gfx
+from . import fetch, gfx, printing
 from .bookmarks import UNSORTED, Bookmarks, short_url
 from .music import MusicPlayer, fmt_time, is_audio
 from .system import IS_MAC, config_dir, prepare_process, shortcut
@@ -88,6 +88,9 @@ class Browser(pyglet.window.Window):
         self.theme = theme_by_name(settings.get("theme", THEMES[0].name))
         self.zoom = float(settings.get("zoom", 1.0))
         self.toc_open = bool(settings.get("explorer", False))
+        self.settings_paper = settings.get("paper")   # the paper size last chosen for printing
+        self.pr = None              # the print panel's state while it's open
+        self.print_ui = None
         self.toc_t = 1.0 if self.toc_open else 0.0
         self.toc = None
         self.toc_scroll = 0
@@ -203,7 +206,8 @@ class Browser(pyglet.window.Window):
             SETTINGS.parent.mkdir(parents=True, exist_ok=True)
             tabs, active = self.session()
             SETTINGS.write_text(json.dumps({"theme": self.theme.name, "zoom": self.zoom,
-                                            "explorer": self.toc_open, "tabs": tabs, "active": active}),
+                                            "explorer": self.toc_open, "tabs": tabs, "active": active,
+                                            "paper": self.settings_paper}),
                                 encoding="utf-8")
         except OSError:
             pass
@@ -370,6 +374,8 @@ class Browser(pyglet.window.Window):
             self.build_toc()
         self.build_tabs()
         self.music_dirty = True
+        if self.print_ui:
+            self.build_print()
 
     def build_menu(self):
         if self.menu:
@@ -783,6 +789,8 @@ class Browser(pyglet.window.Window):
             self.bm_panel["batch"].draw()
         if self.ctx:
             self.ctx["batch"].draw()
+        if self.print_ui:
+            self.print_ui["batch"].draw()
 
     def update(self, dt):
         self.time += dt
@@ -806,6 +814,8 @@ class Browser(pyglet.window.Window):
                         tab.history[tab.hist_i]["url"] = tab.url
                     tab.title = quick_title(doc)
                     self.build_tabs()
+            elif tag[0] == "print":
+                self.toast(result if err is None else f"Printing failed: {str(err)[:80]}")
             elif tag[0] == "img":
                 self.pending_images.discard(tag[1])
                 try:
@@ -972,6 +982,7 @@ class Browser(pyglet.window.Window):
         self.update_music(dt)
         self.update_toc(dt)
 
+        self.update_print(dt)
         if self.ctx:
             for row in self.ctx["rows"]:
                 x, y, rw, rh = row["rect"]
@@ -2030,6 +2041,267 @@ class Browser(pyglet.window.Window):
         for i, wv in enumerate(ui["waves"]):
             wv.visible = mp.volume > (0.02 if i == 0 else 0.5)
 
+    # ================================================================ printing
+    def open_print(self):
+        if not (self.page and self.doc) or self.loading:
+            self.toast("Nothing to print yet")
+            return
+        self.leave_page()
+        names, default = printing.printers()
+        dests = names + [printing.SAVE_AS_PDF]
+        self.pr = dict(dests=dests, dest=dests.index(default) if default in dests else len(dests) - 1,
+                       paper=self.settings_paper or printing.default_paper(), copies=1, job=None,
+                       preview=0, thumbs={}, busy=True, t=0.0, hover={})
+        self.build_print()
+        pyglet.clock.schedule_once(lambda dt: self.prepare_print(), 0.05)  # let the panel appear first
+
+    def prepare_print(self):
+        pr = self.pr
+        if not pr:
+            return
+        for tex in pr["thumbs"].values():
+            tex.delete()
+        pr["thumbs"] = {}
+        base = fetch.split_fragment(self.url)[0]
+        title = self.tab_title(self.tab)
+        try:
+            pr["job"] = printing.render(self, self.doc.text, self.theme, self.images,
+                                        lambda src: fetch.resolve(base, src), title, base, pr["paper"])
+        except Exception as e:
+            self.close_print()
+            self.toast(f"Couldn't prepare the pages ({type(e).__name__})")
+            return
+        pr["busy"], pr["preview"] = False, 0
+        self.build_print()
+
+    def close_print(self):
+        if not self.pr:
+            return
+        for tex in self.pr["thumbs"].values():
+            tex.delete()
+        if self.print_ui:
+            for o in self.print_ui["objs"]:
+                o.delete()
+        self.pr = self.print_ui = None
+        self.update_hover()
+
+    def print_geometry(self):
+        w = min(800, self.width - 40)
+        h = min(540, self.height - 60)
+        return round((self.width - w) / 2), round((self.height - h) / 2), w, h
+
+    def print_thumb(self, n):
+        pr = self.pr
+        if n not in pr["thumbs"]:
+            w, h, rgb = pr["job"].pages[n]
+            pr["thumbs"][n] = pyglet.image.ImageData(w, h, "RGB", rgb, pitch=-w * 3).get_texture()
+        return pr["thumbs"][n]
+
+    def build_print(self):
+        if self.print_ui:
+            for o in self.print_ui["objs"]:
+                o.delete()
+        pr, t, f = self.pr, self.theme, self.ui_font
+        b = pyglet.graphics.Batch()
+        g = [pyglet.graphics.Group(i) for i in range(6)]
+        objs, hits = [], {}
+        W, H = self.width, self.height
+        px, py, w, h = self.print_geometry()
+        backdrop = shapes.Rectangle(0, 0, W, H, color=(0, 0, 0, 0), batch=b, group=g[0])
+        objs.append(backdrop)
+        objs += gfx.soft_shadow(px, py, w, h, 18, b, g[1], strength=150, spread=26, offset=10)
+        objs.append(gfx.rrect(px - 1, py - 1, w + 2, h + 2, 19, t.c("border"), b, g[1]))
+        objs.append(gfx.rrect(px, py, w, h, 18, with_alpha(t.chrome, 255), b, g[1]))
+
+        def label(text, x, y, size=11, color=None, bold=False, anchor_x="left"):
+            lab = pyglet.text.Label(text, font_name=f, font_size=size, bold=bold, color=color or t.c("text"),
+                                    x=x, y=y, anchor_x=anchor_x, anchor_y="center", batch=b, group=g[4])
+            objs.append(lab)
+            return lab
+
+        def pill(name, x, y, pw, ph, color, radius=None):
+            r = gfx.rrect(x, y, pw, ph, ph / 2 if radius is None else radius, color, b, g[2])
+            objs.append(r)
+            hits[name] = (x, y, pw, ph, r)
+            return r
+
+        # preview: the current page on a little desk
+        bx, by, bw, bh = px + 24, py + 64, 300, h - 88
+        objs.append(gfx.rrect(bx, by, bw, bh, 12, t.c("code_bg"), b, g[2]))
+        job = pr["job"]
+        if pr["busy"] or not job:
+            objs.append(shapes.Arc(bx + bw / 2, by + bh / 2 + 8, 14, segments=28, angle=math.radians(260),
+                                   thickness=2.5, color=t.c("accent"), batch=b, group=g[3]))
+            label("Preparing pages…", bx + bw / 2, by + bh / 2 - 26, 10.5, t.c("muted"), anchor_x="center")
+            pr["spinner"] = objs[-2]
+        else:
+            tex = self.print_thumb(pr["preview"])
+            scale = min((bw - 36) / tex.width, (bh - 36) / tex.height)
+            tw, th = tex.width * scale, tex.height * scale
+            tx, ty = bx + (bw - tw) / 2, by + (bh - th) / 2 + 6
+            objs += gfx.soft_shadow(tx, ty, tw, th, 2, b, g[3], strength=90, spread=10, offset=4)
+            sprite = pyglet.sprite.Sprite(tex, x=round(tx), y=round(ty), batch=b, group=g[4])
+            sprite.scale = scale
+            objs.append(sprite)
+            n = len(job.pages)
+            label(f"Page {pr['preview'] + 1} of {n}", bx + bw / 2, py + 40, 10.5, t.c("muted"), anchor_x="center")
+            for name, cx, d in (("prev_page", bx + 40, "left"), ("next_page", bx + bw - 40, "right")):
+                enabled = (pr["preview"] > 0) if d == "left" else (pr["preview"] < n - 1)
+                pill(name, cx - 16, py + 24, 32, 32, t.c("text", 0))
+                objs += gfx.chevron(cx, py + 40, 12, d, t.c("text") if enabled else t.c("muted", 80), b, g[4],
+                                    width=1.8)
+                if not enabled:
+                    del hits[name]
+
+        # options
+        # readable text on the accent colour: dark on light accents, white on dark ones
+        r_, g_, b_ = t.c("accent")[:3]
+        on_accent = (20, 20, 24, 255) if 0.2126 * r_ + 0.7152 * g_ + 0.0722 * b_ > 150 else (255, 255, 255, 255)
+        rx, top = px + 352, py + h - 44
+        label("Print", rx, top, 17, t.c("heading"), bold=True)
+        title = self.tab_title(self.tab)
+        label(title if len(title) < 48 else title[:47] + "…", rx, top - 26, 10.5, t.c("muted"))
+        vx, vw = rx + 112, px + w - 24 - (rx + 112)
+        dest = pr["dests"][pr["dest"]]
+        saving = dest == printing.SAVE_AS_PDF
+
+        y = top - 92
+        label("Destination", rx, y, 10.5, t.c("muted"))
+        pill("dest", vx, y - 17, vw, 34, t.c("text", 14))
+        label(dest if len(dest) < 30 else dest[:29] + "…", vx + 16, y, 11)
+        if len(pr["dests"]) > 1:
+            objs.append(shapes.Line(vx + vw - 26, y + 2, vx + vw - 21, y - 3, 1.6, color=t.c("muted"), batch=b, group=g[4]))
+            objs.append(shapes.Line(vx + vw - 21, y - 3, vx + vw - 16, y + 2, 1.6, color=t.c("muted"), batch=b, group=g[4]))
+
+        y -= 54
+        label("Paper", rx, y, 10.5, t.c("muted"))
+        for i, size in enumerate(("A4", "Letter")):
+            on = pr["paper"] == size
+            pill(f"paper:{size}", vx + i * 104, y - 17, 98, 34, t.c("accent") if on else t.c("text", 14))
+            label(size, vx + i * 104 + 49, y, 11, on_accent if on else t.c("text"), bold=on,
+                  anchor_x="center")
+
+        y -= 54
+        label("Copies", rx, y, 10.5, t.c("muted") if not saving else t.c("muted", 110))
+        if not saving:
+            pill("copies-", vx, y - 17, 34, 34, t.c("text", 14))
+            label("−", vx + 17, y + 1, 14, anchor_x="center")
+            label(str(pr["copies"]), vx + 60, y, 12, t.c("heading"), bold=True, anchor_x="center")
+            pill("copies+", vx + 86, y - 17, 34, 34, t.c("text", 14))
+            label("+", vx + 103, y + 1, 14, anchor_x="center")
+        else:
+            label("—", vx + 17, y, 11, t.c("muted", 110))
+
+        y -= 52
+        if job:
+            pages = len(job.pages)
+            info = f"{pages} page{'s' if pages != 1 else ''} · {pr['paper']} · {printing.DPI} dpi · black on white"
+        else:
+            info = "Laying out the pages for paper…"
+        label(info, rx, y, 10, t.c("muted"))
+        if len(pr["dests"]) == 1:
+            label("No printers are set up, so you can save a PDF instead.", rx, y - 22, 10, t.c("muted"))
+
+        # buttons
+        bw2, gap, by2 = 118, 10, py + 22
+        x = px + w - 24 - bw2
+        primary = "Save PDF" if saving else "Print"
+        pill("go", x, by2, bw2, 38, t.c("accent"), radius=12)
+        label(primary, x + bw2 / 2, by2 + 19, 11.5, on_accent, bold=True, anchor_x="center")
+        x -= 112 + gap
+        pill("open", x, by2, 112, 38, t.c("text", 14), radius=12)
+        label("Open PDF", x + 56, by2 + 19, 11, anchor_x="center")
+        x -= 92 + gap
+        pill("cancel", x, by2, 92, 38, t.c("text", 0), radius=12)
+        label("Cancel", x + 46, by2 + 19, 11, t.c("muted"), anchor_x="center")
+        if pr["busy"]:
+            for k in ("go", "open"):
+                hits.pop(k, None)
+        self.print_ui = dict(batch=b, objs=objs, hits=hits, backdrop=backdrop, panel=(px, py, w, h))
+
+    def print_hit(self, x, y):
+        if not self.print_ui:
+            return None
+        for name, (hx, hy, hw, hh, _) in self.print_ui["hits"].items():
+            if hx <= x <= hx + hw and hy <= y <= hy + hh:
+                return ("print", name)
+        px, py, w, h = self.print_ui["panel"]
+        return ("print", None if px <= x <= px + w and py <= y <= py + h else "backdrop")
+
+    def print_click(self, part):
+        pr = self.pr
+        if part in ("cancel", "backdrop"):
+            self.close_print()
+        elif part == "dest":
+            pr["dest"] = (pr["dest"] + 1) % len(pr["dests"])
+            self.build_print()
+        elif part and part.startswith("paper:"):
+            paper = part.split(":")[1]
+            if paper != pr["paper"]:
+                pr["paper"], pr["busy"] = paper, True
+                self.settings_paper = paper
+                self.save_settings()
+                self.build_print()
+                pyglet.clock.schedule_once(lambda dt: self.prepare_print(), 0.05)
+        elif part in ("copies-", "copies+"):
+            pr["copies"] = max(1, min(99, pr["copies"] + (1 if part == "copies+" else -1)))
+            self.build_print()
+        elif part in ("prev_page", "next_page"):
+            self.flip_preview(-1 if part == "prev_page" else 1)
+        elif part == "open":
+            path = printing.temp_pdf(pr["job"])
+            self.close_print()
+            printing.open_file(path)
+            self.toast("Opened the PDF")
+        elif part == "go":
+            self.print_go()
+
+    def flip_preview(self, step):
+        pr = self.pr
+        if pr and pr["job"]:
+            pr["preview"] = max(0, min(len(pr["job"].pages) - 1, pr["preview"] + step))
+            self.build_print()
+
+    def print_go(self):
+        pr = self.pr
+        job, dest = pr["job"], pr["dests"][pr["dest"]]
+        if dest == printing.SAVE_AS_PDF:
+            path = printing.save_location(job.title)
+            try:
+                printing.write_pdf(job, str(path))
+            except OSError as e:
+                self.toast(f"Couldn't save the PDF ({e.strerror or e})")
+                return
+            self.close_print()
+            home = str(Path.home())
+            shown = "~" + str(path)[len(home):] if str(path).startswith(home) else str(path)
+            self.toast(f"Saved {shown}")
+            return
+        path = printing.temp_pdf(job)
+        copies, paper = pr["copies"], pr["paper"]
+        self.close_print()
+        self.toast(f"Printing {len(job.pages)} page{'s' if len(job.pages) != 1 else ''}…")
+        self.worker.submit(("print",), printing.send_to_printer, path, dest, copies, paper)
+
+    def update_print(self, dt):
+        if not self.print_ui:
+            return
+        pr, t = self.pr, self.theme
+        pr["t"] = approach(pr["t"], 1.0, dt, 14)
+        self.print_ui["backdrop"].color = (0, 0, 0, int((120 if t.dark else 90) * pr["t"]))
+        if pr["busy"] and pr.get("spinner"):
+            pr["spinner"].rotation = (self.time * 400) % 360
+        hit = self.print_hit(*self.mouse)
+        for name, (_, _, _, _, shape) in self.print_ui["hits"].items():
+            v = approach(pr["hover"].get(name, 0.0), 1.0 if hit == ("print", name) else 0.0, dt, 22)
+            pr["hover"][name] = v
+            if name == "go":
+                shape.color = mix(t.c("accent"), t.c("accent2"), 0.35 * v)
+            elif name.startswith("paper:") and pr["paper"] == name.split(":")[1]:
+                continue
+            else:
+                shape.color = t.c("text", int(14 + 20 * v))
+
     # ------------------------------------------------------------ context menu
     def open_context_menu(self, x, y, h):
         """Right-click menu; its items depend on what was clicked."""
@@ -2061,7 +2333,9 @@ class Browser(pyglet.window.Window):
                       None,
                       ("Paste & Go", lambda: self.paste_and_go(), clip, "Ctrl+V"),
                       ("Copy Page Address", lambda: self.copy_text(self.url, "Page address copied"),
-                       bool(self.url), "")]
+                       bool(self.url), ""),
+                      None,
+                      ("Print…", self.open_print, bool(self.page and not self.loading), "Ctrl+P")]
         else:
             return
         self.build_context_menu(x, y, items)
@@ -2127,6 +2401,8 @@ class Browser(pyglet.window.Window):
 
     # ------------------------------------------------------------------- mouse
     def hit(self, x, y):
+        if self.print_ui:  # the print panel is modal
+            return self.print_hit(x, y)
         if self.ctx:
             mx, my, mw, mh = self.ctx["rect"]
             if mx <= x <= mx + mw and my <= y <= my + mh:
@@ -2186,6 +2462,8 @@ class Browser(pyglet.window.Window):
         kind = None
         if self.press and self.press.get("selecting"):
             kind = "text"
+        elif h and h[0] == "print":
+            kind = "hand" if h[1] not in (None, "backdrop") else None
         elif h and (h[0] in ("link", "btn", "theme", "menu", "thumb", "star", "tab", "newtab")
                     or (h[0] in ("bm", "toc", "music") and h[1])) \
                 and h != ("menu", None):
@@ -2218,6 +2496,11 @@ class Browser(pyglet.window.Window):
         self.mouse = (x, y)
         if IS_MAC and button == mouse.LEFT and modifiers & key.MOD_CTRL:
             button = mouse.RIGHT  # Control-click is the Mac's right-click
+        if self.print_ui:
+            h = self.print_hit(x, y)
+            if button == mouse.LEFT and h[1]:
+                self.print_click(h[1])
+            return
         if button == getattr(mouse, "MOUSE4", 8):
             return self.go_back()
         if button == getattr(mouse, "MOUSE5", 16):
@@ -2384,6 +2667,9 @@ class Browser(pyglet.window.Window):
         self.update_hover()
 
     def on_mouse_scroll(self, x, y, scroll_x, scroll_y):
+        if self.print_ui:  # scroll flips through the preview
+            self.flip_preview(-1 if scroll_y > 0 else 1)
+            return
         if self.keys_ctrl:
             self.set_zoom(self.zoom + 0.1 * (1 if scroll_y > 0 else -1))
             return
@@ -2428,10 +2714,21 @@ class Browser(pyglet.window.Window):
         ctrl = modifiers & ACCEL
         alt = modifiers & key.MOD_ALT
         shift = modifiers & key.MOD_SHIFT
+        if self.print_ui:
+            if symbol == key.ESCAPE:
+                self.close_print()
+            elif symbol in (key.ENTER, key.NUM_ENTER) and not self.pr["busy"]:
+                self.print_go()
+            elif symbol in (key.LEFT, key.RIGHT, key.PAGEUP, key.PAGEDOWN):
+                self.flip_preview(-1 if symbol in (key.LEFT, key.PAGEUP) else 1)
+            return pyglet.event.EVENT_HANDLED
         if self.ctx and symbol == key.ESCAPE:
             self.close_context_menu()
             return pyglet.event.EVENT_HANDLED
         self.close_context_menu()
+        if ctrl and not shift and symbol == key.P:
+            self.open_print()
+            return pyglet.event.EVENT_HANDLED
         if ctrl and symbol == key.T:
             self.reopen_closed_tab() if shift else self.new_tab(focus_address=True)
             return pyglet.event.EVENT_HANDLED

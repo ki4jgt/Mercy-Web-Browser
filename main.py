@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Mercy — a Markdown web browser built with pyglet.
 
 Usage:

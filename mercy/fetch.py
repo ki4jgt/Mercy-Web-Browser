@@ -159,13 +159,10 @@ def _local(url: str) -> Document:
 
 
 def _directory_listing(path: Path) -> str:
+    """A folder shows its README if it has one; otherwise a list of its files."""
     for readme in ("README.md", "readme.md", "index.md", "Readme.md"):
         if (path / readme).is_file():
-            # Show the readme, but keep the listing reachable below it.
-            body = (path / readme).read_text(encoding="utf-8", errors="replace")
-            break
-    else:
-        body = ""
+            return (path / readme).read_text(encoding="utf-8", errors="replace")
     entries = sorted(path.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
     entries = [e for e in entries if not e.name.startswith(".")]
     lines = [f"# {path.name or path}", "", f"`{path}`", ""]
@@ -184,8 +181,7 @@ def _directory_listing(path: Path) -> str:
             lines.append(f"- [{e.name}]({href})")
         else:
             lines.append(f"- [{e.name}]({href}) — *{_human_size(e)}*")
-    listing = "\n".join(lines)
-    return f"{body}\n\n---\n\n{listing}" if body else listing
+    return "\n".join(lines)
 
 
 def _human_size(p: Path) -> str:

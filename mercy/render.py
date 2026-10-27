@@ -167,6 +167,31 @@ def auto_number(markdown: str) -> str:
     return "\n".join(out)
 
 
+BREAK_AFTER = set(",;([{./\\=+-*:?|&<>")
+
+
+def wrap_code_line(line: str, cols: int):
+    """Split one line of code into (start, end) spans that fit in `cols`.
+
+    Breaks fall after a space where possible, otherwise after punctuation, and
+    only cut inside a word that is longer than a whole line.
+    """
+    spans, start = [], 0
+    while len(line) - start > cols:
+        limit = start + cols
+        floor = start + max(1, cols // 3)   # don't leave a stub of a line behind
+        cut = next((j for j in range(limit, floor, -1) if line[j - 1] == " "), None)
+        if cut is None:
+            cut = next((j for j in range(limit, floor, -1)
+                        if line[j - 1] in BREAK_AFTER and line[j] != " "), None)
+        if cut is None:
+            cut = limit                     # one enormous word: no choice but to split it
+        spans.append((start, cut))
+        start = cut
+    spans.append((start, len(line)))
+    return spans
+
+
 def slugify(text: str) -> str:
     s = re.sub(r"[^\w\- ]", "", text.strip().lower())
     return re.sub(r" ", "-", s)
@@ -182,8 +207,9 @@ def plain_text(node) -> str:
 
 class Page:
     def __init__(self, markdown: str, theme: Theme, width: float, base_size: float,
-                 images: dict, resolve=lambda src: src):
+                 images: dict, resolve=lambda src: src, printing=False):
         self.theme = theme
+        self.printing = printing        # laid out for paper: no card, shadows or glow
         self.resolve = resolve
         self.width = width
         self.S = base_size
@@ -206,9 +232,12 @@ class Page:
         self.runs: list[TextRun] = []    # selectable text, in document order
         self.sep_next = ""
         self.prefix_next = ""            # list marker for the next copied line
+        self.prev_block = None           # type of the previous sibling block, for paragraph indents
+        self.prev_plain = False          # ...and whether that paragraph was ordinary left-aligned text
         self.title = ""
         self.pad_x = round(base_size * 3.2)
-        self.pad_y = round(base_size * 3.0)
+        self.pad_y = 0 if printing else round(base_size * 3.0)
+        self.boxes: list[tuple] = []     # (top, bottom) of things a page break mustn't cut: images
 
         self.y = self.pad_y
         self.pending = 0.0
@@ -220,7 +249,8 @@ class Page:
         tree = SyntaxTreeNode(_md.parse(auto_number(markdown)))
         self.children(tree, 0, width)
         self.height = self.y + self.pad_y
-        self._card()
+        if not printing:
+            self._card()
 
     # ------------------------------------------------------------------ utils
     def keep(self, *objs):
@@ -269,8 +299,10 @@ class Page:
 
     # ------------------------------------------------------------- block level
     def children(self, node, x, w):
+        self.prev_block = None          # each container starts fresh
         for child in node.children:
             self.block(child, x, w)
+            self.prev_block = child.type
 
     def block(self, node, x, w):
         handler = getattr(self, "b_" + node.type, None)
@@ -288,10 +320,16 @@ class Page:
             only_images = items and all(p.kind == "img" or (p.kind == "word" and not p.text.strip())
                                         for p in self.pieces(items))
             runs = [("center" if only_images else "left", items)]
+        # Book-style first-line indent, for a paragraph that continues the one before
+        # it. The first paragraph after a heading, list, quote or picture starts flush.
+        indent = self.S * 1.5 if self.prev_block == "paragraph" and self.prev_plain and not self.list_depth else 0.0
         sep = "\n" if self.list_depth else "\n\n"
         for align, run in runs:
-            self.flow(run, x, w, align=align, sep=sep)
-            sep = "\n"
+            self.flow(run, x, w, align=align, sep=sep, indent=indent if align == "left" else 0.0)
+            sep, indent = "\n", 0.0
+        # only ordinary text earns the next paragraph an indent (not a picture or an aligned line)
+        has_words = any(p.kind == "word" and p.text.strip() for p in self.pieces(items))
+        self.prev_plain = runs[-1][0] == "left" and has_words
         self.space(self.S * (0.35 if tight else 1.0))
 
     def align_runs(self, items):
@@ -553,16 +591,18 @@ class Page:
 
         # body
         size = S * 0.86
-        # Wrap by character ourselves (the font is monospaced), so every visual
-        # line has known character positions for selection and copying.
+        # Wrap ourselves (the font is monospaced), so every visual line has known
+        # character positions for selection and copying. Lines break between words
+        # where they can; continuations start at the left edge.
         mono = gfx.font(t.mono_font, size)
-        cols = max(8, int((w - 2 * pad) // max(1.0, gfx.text_width(mono, "M"))))
-        chunks, inserts, pos = [], [], 0          # chunks: (source offset, text, starts a source line)
+        cw = max(1.0, gfx.text_width(mono, "M"))
+        cols = max(8, int((w - 2 * pad) // cw))
+        chunks, inserts, pos = [], [], 0   # chunks: (source offset, text, starts a source line)
         for src_line in code.split("\n"):
-            for k in range(0, max(1, len(src_line)), cols):
-                if k:
+            for k, end in wrap_code_line(src_line, cols):
+                if k:  # this newline exists only on screen
                     inserts.append(pos + k)
-                chunks.append((pos + k, src_line[k:k + cols], k == 0))
+                chunks.append((pos + k, src_line[k:end], k == 0))
             pos += len(src_line) + 1
         ls = round(size * 1.65)
         doc = pyglet.text.document.FormattedDocument("\n".join(c[1] for c in chunks) or " ")
@@ -581,7 +621,9 @@ class Page:
                          "\n\n" if i == 0 else ("\n" if new_line else ""), keep_empty=True)
         self.y = body_top + layout.content_height + pad * 0.9
         h = self.y - top
-        if t.dark:
+        if self.printing:
+            pass
+        elif t.dark:
             self.keep(gfx.soft_shadow(x, -(top + h), w, h, radius, self.batch, self.g_card, strength=70,
                                       spread=S * 0.8, offset=S * 0.3))
         else:
@@ -920,11 +962,12 @@ class Page:
                 h, w = h * maxw / w, maxw
         return Piece("img", info["alt"], st, w, img=dict(info, h=h, tex=tex if tex not in (None, "error") else None))
 
-    def flow(self, items, x, width, align="left", line_height=1.65, sep="\n\n"):
+    def flow(self, items, x, width, align="left", line_height=1.65, sep="\n\n", indent=0.0):
         """Lay out inline items as wrapped lines. `sep` is what copied text puts
-        between this block and whatever was selected before it."""
+        between this block and whatever was selected before it; `indent` pushes
+        the first line in."""
         pieces = self.pieces(items)
-        lines, cur, cur_w = [], [], 0.0
+        lines, cur, cur_w = [], [], indent
         line_sep = sep
 
         def push(after=" "):
@@ -958,9 +1001,10 @@ class Page:
             cur_w += pw
         if cur or not lines:
             push()
-        for line, lw, line_sep in lines:
+        for i, (line, lw, line_sep) in enumerate(lines):
             self.queue_sep(line_sep)
-            self.render_line(line, lw, x, width, align, line_height)
+            shift = indent if i == 0 else 0.0
+            self.render_line(line, lw - shift, x + shift, width - shift, align, line_height)
 
     def split_word(self, p: Piece, width):
         chunks, buf = [], ""
@@ -1078,7 +1122,8 @@ class Page:
                                         y=round(-(itop + h / 2)), anchor_x="center", anchor_y="center",
                                         width=None, batch=self.batch, group=self.g_text))
         else:
-            if h > S * 6:
+            self.boxes.append((itop, itop + h))
+            if h > S * 6 and not self.printing:
                 self.keep(gfx.soft_shadow(x, -(itop + h), w, h, 6, self.batch, self.g_bg,
                                           strength=90 if t.dark else 40, spread=S, offset=S * 0.4))
             sprite = pyglet.sprite.Sprite(tex, x=round(x), y=round(-(itop + h)), batch=self.batch,
@@ -1193,6 +1238,26 @@ class Page:
                 parts.append(r.sep)
             parts.append(r.text[start:end])
         return "".join(parts)
+
+    def page_breaks(self, page_h):
+        """Split the document into page-sized slices without cutting through a
+        line of text or a picture. Returns [(top, bottom), ...] in document y."""
+        spans = sorted({(r.top, r.top + r.h) for r in self.runs} | set(self.boxes))
+        pages, start = [], 0.0
+        while start < self.height - 1:
+            cut = start + page_h
+            if cut >= self.height:
+                pages.append((start, self.height))
+                break
+            moved = True
+            while moved:  # pull the break up above anything it would slice through
+                moved = False
+                for top, bottom in spans:
+                    if top < cut < bottom and top - start > page_h * 0.3:
+                        cut, moved = top, True
+            pages.append((start, cut))
+            start = cut
+        return pages
 
     # ------------------------------------------------------------------ query
     def link_at(self, dx, dy):

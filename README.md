@@ -28,6 +28,7 @@ Settings, tabs and bookmarks are saved in `~/.config/mercy` on Linux, `%APPDATA%
 - A header explorer sidebar (<kbd>Ctrl</kbd> + <kbd>E</kbd>) that lists the page's headings and highlights the section you're reading
 - Tabs: open, close, reopen, duplicate and drag to reorder; links open in background tabs with a middle-click or <kbd>Ctrl</kbd>-click, and your tabs come back next time
 - A built-in music player: click links to audio files (or **Play all** in a folder) to queue them up, and keep browsing while they play
+- Printing with a preview, printer choice, A4 or Letter paper and copies, or save as PDF (<kbd>Ctrl</kbd> + <kbd>P</kbd>)
 - Smooth scrolling, back/forward history with saved scroll positions, in-page anchors, and zoom
 - GitHub URLs open the raw Markdown behind them
 - Local folders show as browsable listings, and source files show as highlighted code
@@ -46,6 +47,7 @@ Settings, tabs and bookmarks are saved in `~/.config/mercy` on Linux, `%APPDATA%
 | `mercy/pages/` | built-in pages |
 | `mercy/icons/` | the app icon at 16–512 px |
 | `mercy/music.py` | the music player's queue and playback |
+| `mercy/printing.py` | page layout for paper, the PDF writer, and talking to printers |
 | `mercy/system.py` | the differences between Linux, Windows and macOS |
 | `Mercy.pyw`, `Mercy.command` | double-click launchers for Windows and macOS |
 | `tools/make_icon.py` | draws the icon; run it to regenerate `mercy/icons/` |

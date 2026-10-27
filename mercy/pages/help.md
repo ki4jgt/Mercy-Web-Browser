@@ -9,7 +9,7 @@ Mercy understands several kinds of address:
 | `https://example.com/notes.md`   | the Markdown file |
 | `github.com/owner/repo`          | the repository's README |
 | `github.com/owner/repo/blob/…`   | the raw file behind it |
-| `~/Documents` or `/some/folder`  | a folder listing (and its README) |
+| `~/Documents` or `/some/folder`  | the folder's README, or a list of its files if it has none |
 | `./notes.md`                     | a local file |
 | `mercy://home`                   | the start page |
 
@@ -45,6 +45,7 @@ Source files such as `.py`, `.json` or `.toml` are shown as highlighted code.
 | <kbd>Ctrl</kbd> + <kbd>D</kbd> | Bookmark this page (or remove its bookmark) |
 | <kbd>Ctrl</kbd> + <kbd>B</kbd> | Open the bookmarks panel |
 | <kbd>Ctrl</kbd> + <kbd>E</kbd> | Show or hide the header explorer |
+| <kbd>Ctrl</kbd> + <kbd>P</kbd> | Print, or save as PDF |
 | <kbd>Ctrl</kbd> + <kbd>Q</kbd> | Quit |
 
 You can also hold <kbd>Ctrl</kbd> while scrolling to zoom, drag the scrollbar on the right, and use your mouse's side buttons for back and forward.
@@ -60,6 +61,12 @@ Drag tabs to reorder them, middle-click one to close it, or scroll over the stri
 Click a link to a music file (MP3, OGG, FLAC, WAV, M4A and others) and Mercy plays it in a player at the bottom of the window instead of leaving the page. Every other track linked on the same page joins the queue in order. Folders with music in them get a **Play all** link at the top.
 
 The player has previous, play/pause and next buttons, a progress line you can click or drag to seek, and a volume slider. You can also scroll over the player to change the volume. Music keeps playing while you browse and switch tabs. Close the player with **×**.
+
+## Printing
+
+Press <kbd>Ctrl</kbd> + <kbd>P</kbd>, or right-click the page and choose **Print…**. Mercy lays the page out again for paper, in black on white whatever color style you're using, with a running header and page numbers. Page breaks never cut through a line of text or a picture.
+
+The print panel shows a preview you can flip through with the arrows, the arrow keys, or the scroll wheel. Choose a printer, A4 or Letter paper, and the number of copies, then press **Print**. Choose **Save as PDF** to keep a copy in your Documents folder, or **Open PDF** to open it in your PDF viewer. On Linux and macOS, Mercy prints through the system's printing service (CUPS). On Windows it uses the default printer.
 
 ## Selecting and copying
 
@@ -80,6 +87,10 @@ The full manager lives at [mercy://bookmarks](bookmarks). There you can rename b
 ## Code blocks
 
 Every code block has a **COPY** button in its header. Click it and the code is on your clipboard.
+
+## Paragraph indents
+
+As in a printed book, a paragraph that follows another paragraph has its first line indented. The first paragraph after a heading, list, quote, picture or aligned line starts flush with the margin, since the break before it already marks something new.
 
 ## Aligning lines
 
