@@ -118,6 +118,20 @@ THEMES = [
         blob_alpha=12,
     ),
     Theme(
+        # A plain, neutral dark mode: graphite greys with no colour cast, for those
+        # who want dark without a mood.
+        name="Dark", dark=True,
+        bg_top="#0b0b0d", bg_bottom="#141417",
+        blobs=("#3a3d45", "#2c2f36", "#45484f"),
+        surface="#18181b", surface_alpha=240,
+        text="#dcdce0", muted="#8e8e96", heading="#f5f5f7",
+        accent="#8ab4f8", accent2="#a8a8b3", link="#8ab4f8",
+        code_bg="#111113", code_text="#d4d4d8", border="#2a2a2f",
+        syntax=dict(keyword="#569cd6", string="#ce9178", comment="#6a9955", number="#b5cea8",
+                    function="#dcdcaa", type="#4ec9b0", operator="#d4d4d4", builtin="#9cdcfe"),
+        blob_alpha=7,
+    ),
+    Theme(
         name="Paper", dark=False,
         bg_top="#f3f1ec", bg_bottom="#e7e3da",
         blobs=("#f9d8b4", "#c7dcf7", "#e9d5f7"),

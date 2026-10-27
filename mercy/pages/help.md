@@ -31,6 +31,8 @@ Source files such as `.py`, `.json` or `.toml` are shown as highlighted code.
 | <kbd>Ctrl</kbd> + <kbd>Tab</kbd> / <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>Tab</kbd> | Next / previous tab (also <kbd>Ctrl</kbd> + <kbd>PgDn</kbd> / <kbd>PgUp</kbd>) |
 | <kbd>Ctrl</kbd> + <kbd>1</kbd> … <kbd>8</kbd>, <kbd>9</kbd> | Go to that tab, or the last one |
 | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>S</kbd> | Next color style |
+| <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>P</kbd> | Play / pause music |
+| <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>.</kbd> / <kbd>,</kbd> | Next / previous track |
 | <kbd>Ctrl</kbd> + <kbd>+</kbd> / <kbd>-</kbd> / <kbd>0</kbd> | Zoom in / out / reset |
 | <kbd>↑</kbd> / <kbd>↓</kbd> | Scroll; hold to glide, speeding up the longer you hold |
 | <kbd>Space</kbd>, <kbd>PgUp</kbd>, <kbd>PgDn</kbd> | Scroll a screen |
@@ -52,6 +54,12 @@ You can also hold <kbd>Ctrl</kbd> while scrolling to zoom, drag the scrollbar on
 Open a new tab with the **+** button, <kbd>Ctrl</kbd> + <kbd>T</kbd>, or a double-click on the empty part of the tab strip. Middle-click or <kbd>Ctrl</kbd>-click a link to open it in a background tab, or right-click it and choose **Open Link in New Tab**.
 
 Drag tabs to reorder them, middle-click one to close it, or scroll over the strip to flip between them. Right-click a tab to duplicate it, close the others, or reopen one you closed. Every tab keeps its own history and scroll position. Your tabs are restored the next time you start Mercy without an address. Each one loads when you first open it.
+
+## Music
+
+Click a link to a music file (MP3, OGG, FLAC, WAV, M4A and others) and Mercy plays it in a player at the bottom of the window instead of leaving the page. Every other track linked on the same page joins the queue in order. Folders with music in them get a **Play all** link at the top.
+
+The player has previous, play/pause and next buttons, a progress line you can click or drag to seek, and a volume slider. You can also scroll over the player to change the volume. Music keeps playing while you browse and switch tabs. Close the player with **×**.
 
 ## Selecting and copying
 

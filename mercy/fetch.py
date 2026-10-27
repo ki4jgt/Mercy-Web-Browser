@@ -17,6 +17,7 @@ from .system import IS_MAC
 PAGES_DIR = Path(__file__).parent / "pages"
 USER_AGENT = "Mercy/0.1 (Markdown browser; +pyglet)"
 MARKDOWN_EXT = {".md", ".markdown", ".mdown", ".mkd", ".mdx"}
+AUDIO_EXT = {".mp3", ".ogg", ".oga", ".opus", ".flac", ".wav", ".m4a", ".aac", ".wma", ".aif", ".aiff"}
 CODE_EXT = {
     ".py": "python", ".js": "javascript", ".ts": "typescript", ".json": "json", ".toml": "toml",
     ".yaml": "yaml", ".yml": "yaml", ".sh": "bash", ".c": "c", ".h": "c", ".cpp": "cpp",
@@ -168,6 +169,11 @@ def _directory_listing(path: Path) -> str:
     entries = sorted(path.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
     entries = [e for e in entries if not e.name.startswith(".")]
     lines = [f"# {path.name or path}", "", f"`{path}`", ""]
+    audio = [e for e in entries if e.is_file() and e.suffix.lower() in AUDIO_EXT]
+    if audio:
+        n = len(audio)
+        lines += [f"**[Play all {n} track{'s' if n != 1 else ''}](<{audio[0].absolute().as_uri()}>)** "
+                  "· or click any one to start there", ""]
     if path.parent != path:
         lines.append(f"- [**..** parent folder](<{path.parent.as_uri().rstrip('/')}/>)")
     for e in entries:

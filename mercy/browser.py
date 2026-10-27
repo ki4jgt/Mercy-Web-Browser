@@ -17,12 +17,14 @@ from pyglet.window import key, mouse
 
 from . import fetch, gfx
 from .bookmarks import UNSORTED, Bookmarks, short_url
+from .music import MusicPlayer, fmt_time, is_audio
 from .system import IS_MAC, config_dir, prepare_process, shortcut
 from .render import Page
 from .themes import THEMES, SANS, hex_rgb, mix, pick_font, theme_by_name, with_alpha
 
 TOOLBAR_H = 60
 TABS_H = 40
+MUSIC_H = 64      # the floating now-playing bar
 CHROME_H = TOOLBAR_H + TABS_H   # tab strip on top, toolbar under it
 TOC_W = 272
 ICON_DIR = Path(__file__).parent / "icons"
@@ -147,6 +149,12 @@ class Browser(pyglet.window.Window):
         self.bm_filter, self.bm_scroll, self.bm_index = "", 0, 0
         self.star_pop = 0.0
 
+        self.music = MusicPlayer(on_change=self.music_changed)
+        self.music_t = 0.0          # slide-in of the player bar
+        self.music_ui = None
+        self.music_dirty = False
+        self.music_drag = None
+
         self.menu_open = False
         self.menu_t = 0.0
         self.toast_text = ""
@@ -219,7 +227,8 @@ class Browser(pyglet.window.Window):
     def max_scroll(self):
         if not self.page:
             return 0
-        return max(0.0, self.page.height - self.view_top + 36)
+        # leave room to scroll the last lines clear of the player bar
+        return max(0.0, self.page.height - self.view_top + 36 + self.music_lift())
 
     def to_doc(self, x, y):
         return x - self.page_offset_x(), self.view_top + round(self.scroll) - y
@@ -360,6 +369,7 @@ class Browser(pyglet.window.Window):
         if self.toc_open or self.toc:
             self.build_toc()
         self.build_tabs()
+        self.music_dirty = True
 
     def build_menu(self):
         if self.menu:
@@ -415,6 +425,9 @@ class Browser(pyglet.window.Window):
             return
         if url.startswith("mailto:"):
             webbrowser.open(url)
+            return
+        if is_audio(url):
+            self.play_audio(url)
             return
         base, frag = fetch.split_fragment(url)
         cur_base, _ = fetch.split_fragment(self.url)
@@ -759,6 +772,11 @@ class Browser(pyglet.window.Window):
         self.chrome.draw()
         if self.tab_strip:
             self.tab_strip["batch"].draw()
+        if self.music_ui and self.music_t > 0.005:
+            mx, my, _, _ = self.music_geometry()
+            self.view = Mat4.from_translation(Vec3(mx, my, 0))
+            self.music_ui["batch"].draw()
+            self.view = Mat4()
         if self.menu_open and self.menu:
             self.menu.draw()
         if self.bm_panel:
@@ -913,6 +931,8 @@ class Browser(pyglet.window.Window):
             self.status_bg.width = self.status_label.content_width + 24
         left = TOC_W * ease(self.toc_t)
         self.status_bg.x, self.status_label.x = 10 + left, 22 + left
+        lift = self.music_lift()
+        self.status_bg.y, self.status_label.y = 10 + lift, 23 + lift
         alpha = 1.0 if status else 0.0
         self.status_alpha = approach(getattr(self, "status_alpha", 0.0), alpha, dt, 18)
         self.status_bg.color = with_alpha(t.chrome, int(235 * self.status_alpha))
@@ -925,7 +945,7 @@ class Browser(pyglet.window.Window):
             self.toast_label.text = self.toast_text
             tw = self.toast_label.content_width + 44
             self.toast_bg.x, self.toast_bg.width = (w - tw) / 2, tw
-            self.toast_bg.y = 28 - (1 - ta) * 10
+            self.toast_bg.y = 28 + self.music_lift() - (1 - ta) * 10
             self.toast_label.y = self.toast_bg.y + 20
         self.toast_bg.color = with_alpha(mix(t.chrome, t.c("accent"), 0.12), int(240 * ta))
         self.toast_label.color = t.c("heading", int(255 * ta))
@@ -949,6 +969,7 @@ class Browser(pyglet.window.Window):
         if self.bm_panel:
             self.update_bm_panel(dt)
         self.update_tabs(dt)
+        self.update_music(dt)
         self.update_toc(dt)
 
         if self.ctx:
@@ -1574,7 +1595,11 @@ class Browser(pyglet.window.Window):
         if href.startswith(("mercy-copy:", "mercy-bm:", "mercy-external:", "mailto:")):
             self.follow(href)
             return
-        self.new_tab(self.resolve_href(href), background=True)
+        url = self.resolve_href(href)
+        if is_audio(url):
+            self.play_audio(url)
+            return
+        self.new_tab(url, background=True)
 
     def quit(self):
         self.save_settings()
@@ -1779,6 +1804,232 @@ class Browser(pyglet.window.Window):
                 ("Close Other Tabs", lambda: self.close_other_tabs(i), len(self.tabs) > 1, ""),
                 ("Reopen Closed Tab", self.reopen_closed_tab, bool(self.closed_tabs), "Ctrl+Shift+T")]
 
+    # ============================================================ music player
+    def music_changed(self):
+        self.music_dirty = True
+        if self.music.error:
+            self.toast(self.music.error)
+
+    def play_audio(self, url):
+        """Play an audio link, queueing every other audio link on the page around it."""
+        links = []
+        if self.page:
+            for link in self.page.links:
+                u = self.resolve_href(link.href)
+                if is_audio(u) and u not in links:
+                    links.append(u)
+        if url not in links:
+            links = [url]
+        self.music.play_queue(links, links.index(url))
+        if len(links) > 1:
+            self.toast(f"Playing {links.index(url) + 1} of {len(links)}")
+
+    def music_geometry(self):
+        left = self.content_left()
+        w = min(660, self.width - left - 32)
+        x = round(left + (self.width - left - w) / 2)
+        y = round(14 - (MUSIC_H + 40) * (1 - ease(self.music_t)))
+        return x, y, w, MUSIC_H
+
+    def music_lift(self):
+        """How far bottom overlays (status, toast) move up to clear the player."""
+        return (MUSIC_H + 18) * ease(self.music_t)
+
+    def build_music(self):
+        self.music_dirty = False
+        if self.music_ui:
+            for o in self.music_ui["objs"]:
+                o.delete()
+            self.music_ui = None
+        mp, t, f = self.music, self.theme, self.ui_font
+        if not mp.active:
+            return
+        b = pyglet.graphics.Batch()
+        g = [pyglet.graphics.Group(i) for i in range(6)]
+        objs = []
+        _, _, w, h = self.music_geometry()
+        objs += gfx.soft_shadow(0, 0, w, h, 18, b, g[0], strength=130 if t.dark else 55, spread=18, offset=7)
+        objs.append(gfx.rrect(-1, -1, w + 2, h + 2, 19, t.c("border"), b, g[0]))
+        objs.append(gfx.rrect(0, 0, w, h, 18, with_alpha(t.chrome, 250), b, g[0]))
+
+        # artwork tile with a little animated equaliser
+        objs.append(gfx.rrect(12, 14, 40, 40, 11, t.c("accent", 55), b, g[1]))
+        objs.append(gfx.GradientRect(14, 16, 36, 36, t.c("accent", 40), t.c("accent2", 70), batch=b, group=g[1]))
+        bars = [shapes.Rectangle(19 + i * 6.4, 22, 4, 6, color=t.c("heading", 230), batch=b, group=g[2]) for i in range(5)]
+        spin = shapes.Arc(32, 34, 9, segments=24, angle=math.radians(260), thickness=2,
+                          color=t.c("heading", 0), batch=b, group=g[2])
+        objs += bars + [spin]
+
+        # title and details
+        cx = w - 200
+        room = cx - 64 - 64
+        title = mp.title or "Untitled"
+        bold = gfx.font(f, 11.5, bold=True)
+        while title and gfx.text_width(bold, title + "…") > room and gfx.text_width(bold, title) > room:
+            title = title[:-1]
+        if title != (mp.title or "Untitled"):
+            title = title.rstrip() + "…"
+        objs.append(pyglet.text.Label(title, font_name=f, font_size=11.5, bold=True, color=t.c("heading"),
+                                      x=64, y=42, anchor_y="center", batch=b, group=g[3]))
+        sub = pyglet.text.Label("", font_name=f, font_size=9.5, color=t.c("muted"), x=64, y=25,
+                                anchor_y="center", batch=b, group=g[3])
+        objs.append(sub)
+
+        # transport controls
+        def round_button(x, r, color):
+            c = shapes.Circle(x, 34, r, segments=32, color=color, batch=b, group=g[1])
+            objs.append(c)
+            return c
+        prev_bg, next_bg = round_button(cx - 42, 16, t.c("text", 0)), round_button(cx + 42, 16, t.c("text", 0))
+        play_bg = round_button(cx, 19, t.c("accent"))
+        ic = t.c("text")
+        for x, d in ((cx - 42, -1), (cx + 42, 1)):  # skip icons: a triangle against a bar
+            objs.append(shapes.Triangle(x - 4 * d, 40, x - 4 * d, 28, x + 4 * d, 34, color=ic, batch=b, group=g[2]))
+            objs.append(shapes.Rectangle(x + 4 * d - (1 if d > 0 else 1), 28, 2.2, 12, color=ic, batch=b, group=g[2]))
+        on = t.c("surface") if t.dark else (255, 255, 255, 255)
+        if mp.playing or mp.loading:
+            objs.append(shapes.Rectangle(cx - 5.5, 27, 4, 14, color=on, batch=b, group=g[2]))
+            objs.append(shapes.Rectangle(cx + 1.5, 27, 4, 14, color=on, batch=b, group=g[2]))
+        else:
+            objs.append(shapes.Triangle(cx - 4, 42, cx - 4, 26, cx + 8, 34, color=on, batch=b, group=g[2]))
+
+        # volume: a little speaker, its sound waves, and a slider
+        vx = w - 124
+        objs.append(shapes.Rectangle(vx - 6, 31, 4, 6, color=ic, batch=b, group=g[2]))
+        objs.append(shapes.Triangle(vx - 3, 34, vx + 3, 40, vx + 3, 28, color=ic, batch=b, group=g[2]))
+        objs.append(shapes.Rectangle(vx - 3, 31, 6, 6, color=ic, batch=b, group=g[2]))
+        waves = [shapes.Arc(vx + 4, 34, r, segments=12, angle=math.radians(90), start_angle=math.radians(-45),
+                            thickness=1.5, color=ic, batch=b, group=g[2]) for r in (5, 9)]
+        objs += waves
+        sx0, sx1 = w - 104, w - 48
+        objs.append(gfx.rrect(sx0, 32.5, sx1 - sx0, 3, 1.5, t.c("muted", 90), b, g[1]))
+        vol_fill = gfx.rrect(sx0, 32.5, max(3, (sx1 - sx0) * mp.volume), 3, 1.5, t.c("accent"), b, g[2])
+        vol_knob = shapes.Circle(sx0 + (sx1 - sx0) * mp.volume, 34, 5, segments=16, color=t.c("heading"),
+                                 batch=b, group=g[3])
+        objs += [vol_fill, vol_knob]
+
+        # close
+        close_bg = round_button(w - 22, 12, t.c("text", 0))
+        c = 3.6
+        objs += [shapes.Line(w - 22 - c, 34 - c, w - 22 + c, 34 + c, 1.5, color=t.c("muted"), batch=b, group=g[2]),
+                 shapes.Line(w - 22 - c, 34 + c, w - 22 + c, 34 - c, 1.5, color=t.c("muted"), batch=b, group=g[2])]
+
+        # progress along the bottom edge
+        px0, px1 = 16, w - 16
+        objs.append(gfx.rrect(px0, 6, px1 - px0, 3, 1.5, t.c("muted", 70), b, g[1]))
+        prog = gfx.GradientRect(px0, 6, 1, 3, t.c("accent"), t.c("accent2"), vertical=False, batch=b, group=g[2])
+        knob = shapes.Circle(px0, 7.5, 5, segments=16, color=t.c("heading", 0), batch=b, group=g[3])
+        objs += [prog, knob]
+
+        self.music_ui = dict(
+            batch=b, objs=objs, w=w, sub=sub, bars=bars, spin=spin, prog=prog, knob=knob, track=(px0, px1),
+            vol=(sx0, sx1), vol_fill=vol_fill, vol_knob=vol_knob, waves=waves,
+            buttons={"prev": (cx - 42, 16, prev_bg), "next": (cx + 42, 16, next_bg), "play": (cx, 19, play_bg),
+                     "close": (w - 22, 12, close_bg)},
+            hover={}, playing=mp.playing, sub_text=None)
+
+    def music_hit(self, x, y):
+        if not self.music_ui or self.music_t < 0.5:
+            return None
+        mx, my, w, h = self.music_geometry()
+        x, y = x - mx, y - my
+        if not (-2 <= x <= w + 2 and -2 <= y <= h + 2):
+            return None
+        if y <= 15:
+            return ("music", "seek")
+        for name, (bx, r, _) in self.music_ui["buttons"].items():
+            if (x - bx) ** 2 + (y - 34) ** 2 <= (r + 3) ** 2:
+                return ("music", name)
+        sx0, sx1 = self.music_ui["vol"]
+        if sx0 - 8 <= x <= sx1 + 8 and 22 <= y <= 46:
+            return ("music", "volume")
+        return ("music", None)
+
+    def music_press(self, part, x):
+        mp = self.music
+        if part == "play":
+            mp.toggle()
+        elif part == "prev":
+            mp.previous()
+        elif part == "next":
+            mp.next()
+        elif part == "close":
+            mp.stop()
+        elif part in ("seek", "volume"):
+            self.music_drag = part
+            self.music_drag_to(x)
+
+    def music_drag_to(self, x):
+        mx = self.music_geometry()[0]
+        ui = self.music_ui
+        if not ui:
+            return
+        if self.music_drag == "seek":
+            a, b_ = ui["track"]
+            if self.music.duration:
+                self.music.seek((x - mx - a) / (b_ - a) * self.music.duration)
+        elif self.music_drag == "volume":
+            a, b_ = ui["vol"]
+            self.music.set_volume((x - mx - a) / (b_ - a))
+            self.music_dirty = True
+
+    def update_music(self, dt):
+        mp, t = self.music, self.theme
+        mp.poll()
+        self.music_t = approach(self.music_t, 1.0 if mp.active else 0.0, dt, 11)
+        if self.music_dirty or (self.music_ui and self.music_ui["playing"] != mp.playing) \
+                or (mp.active and not self.music_ui):
+            self.build_music()
+        ui = self.music_ui
+        if not ui:
+            return
+        # details line: artist, time, place in the queue
+        if mp.loading:
+            text = "Loading…"
+        elif mp.error:
+            text = mp.error
+        else:
+            parts = [mp.artist] if mp.artist else []
+            parts.append(f"{fmt_time(mp.position)} / {fmt_time(mp.duration)}" if mp.duration
+                         else fmt_time(mp.position))
+            if len(mp.queue) > 1:
+                parts.append(f"{mp.index + 1} of {len(mp.queue)}")
+            text = "  ·  ".join(parts)
+        if text != ui["sub_text"]:
+            ui["sub_text"] = text
+            font, room = gfx.font(self.ui_font, 9.5), ui["w"] - 200 - 64 - 56
+            while gfx.text_width(font, text) > room and len(text) > 1:
+                text = text[:-2].rstrip() + "…"
+            ui["sub"].text = text
+        # equaliser bars bounce while playing (decorative), rest while paused
+        for i, bar in enumerate(ui["bars"]):
+            if mp.playing:
+                level = 0.5 + 0.5 * math.sin(self.time * (5.1 + i * 1.7) + i * 1.3) * math.sin(self.time * 2.3 + i)
+                bar.height = 4 + 20 * abs(level)
+            else:
+                bar.height = approach(bar.height, 4, dt, 10)
+            bar.color = t.c("heading", 0 if mp.loading else 230)
+        ui["spin"].color = t.c("heading", 255 if mp.loading else 0)
+        ui["spin"].rotation = (self.time * 400) % 360
+        # progress
+        a, b_ = ui["track"]
+        frac = (mp.position / mp.duration) if mp.duration else 0.0
+        frac = max(0.0, min(1.0, frac))
+        ui["prog"].width = max(1.0, (b_ - a) * frac)
+        ui["knob"].x = a + (b_ - a) * frac
+        over_seek = self.hover == ("music", "seek") or self.music_drag == "seek"
+        ui["knob"].color = t.c("heading", 255 if over_seek and mp.duration else 0)
+        # hover glow on buttons
+        for name, (_, _, bg) in ui["buttons"].items():
+            v = approach(ui["hover"].get(name, 0.0), 1.0 if self.hover == ("music", name) else 0.0, dt, 22)
+            ui["hover"][name] = v
+            if name == "play":
+                bg.color = mix(t.c("accent"), t.c("accent2"), 0.45 * v)
+            else:
+                bg.color = t.c("text", int(24 * v))
+        for i, wv in enumerate(ui["waves"]):
+            wv.visible = mp.volume > (0.02 if i == 0 else 0.5)
+
     # ------------------------------------------------------------ context menu
     def open_context_menu(self, x, y, h):
         """Right-click menu; its items depend on what was clicked."""
@@ -1896,7 +2147,7 @@ class Browser(pyglet.window.Window):
                     if rx <= x <= rx + rw and ry <= y <= ry + rh:
                         return ("menu", row["theme"])
                 return ("menu", None)
-        hit = self.tab_hit(x, y) or self.toc_hit(x, y)
+        hit = self.music_hit(x, y) or self.tab_hit(x, y) or self.toc_hit(x, y)
         if hit:
             return hit
         if y >= self.height - CHROME_H:
@@ -1936,7 +2187,7 @@ class Browser(pyglet.window.Window):
         if self.press and self.press.get("selecting"):
             kind = "text"
         elif h and (h[0] in ("link", "btn", "theme", "menu", "thumb", "star", "tab", "newtab")
-                    or (h[0] in ("bm", "toc") and h[1])) \
+                    or (h[0] in ("bm", "toc", "music") and h[1])) \
                 and h != ("menu", None):
             kind = "hand"
         elif h and h[0] == "ctx":
@@ -1985,6 +2236,12 @@ class Browser(pyglet.window.Window):
             return
         if self.bm_open and h != ("btn", "bookmarks"):
             self.close_bm_panel()
+        if h and h[0] == "music":
+            if button == mouse.LEFT and h[1]:
+                if self.editing:
+                    self.stop_editing()
+                self.music_press(h[1], x)
+            return
         if h and h[0] in ("tab", "newtab", "tabstrip"):
             self.menu_open = False
             if self.editing:
@@ -2093,6 +2350,9 @@ class Browser(pyglet.window.Window):
             span = max(1, track - th)
             self.target = self.scroll = max(0, min(ms, s0 + (y0 - y) * ms / span))
             return
+        if self.music_drag:
+            self.music_drag_to(x)
+            return
         if self.tab_drag is not None:
             self.drag_tab(x)
             return
@@ -2113,6 +2373,7 @@ class Browser(pyglet.window.Window):
         self.drag_scrollbar = None
         self.addr_drag = False
         self.tab_drag = None
+        self.music_drag = None
         p, self.press = self.press, None
         if button == mouse.LEFT and p and p["link"] is not None and not p["selecting"] and self.page:
             href = self.page.links[p["link"]].href
@@ -2127,6 +2388,10 @@ class Browser(pyglet.window.Window):
             self.set_zoom(self.zoom + 0.1 * (1 if scroll_y > 0 else -1))
             return
         self.close_context_menu()
+        if self.music_hit(x, y):  # wheel over the player sets the volume
+            self.music.set_volume(self.music.volume + 0.05 * (1 if scroll_y > 0 else -1))
+            self.music_dirty = True
+            return
         if y >= self.height - TABS_H:  # wheel over the tab strip flips through tabs
             if self.time - self.strip_wheel[1] > 0.35:
                 self.strip_wheel = (0.0, self.time)
@@ -2183,6 +2448,14 @@ class Browser(pyglet.window.Window):
         if ctrl and not shift and key._1 <= symbol <= key._9:
             n = symbol - key._1
             self.switch_tab(len(self.tabs) - 1 if n == 8 else n)
+            return pyglet.event.EVENT_HANDLED
+        if ctrl and shift and symbol in (key.P, key.PERIOD, key.COMMA):
+            if not self.music.active:
+                self.toast("Nothing to play yet: click a link to a music file")
+            elif symbol == key.P:
+                self.music.toggle()
+            else:
+                self.music.next() if symbol == key.PERIOD else self.music.previous()
             return pyglet.event.EVENT_HANDLED
         if ctrl and shift and symbol == key.S:
             self.cycle_theme()

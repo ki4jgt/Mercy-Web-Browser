@@ -13,13 +13,14 @@ Mercy is a quiet little web browser that speaks **Markdown** instead of HTML. Po
 - [The CommonMark spec README](https://raw.githubusercontent.com/commonmark/commonmark-spec/master/README.md)
 - [markdown-it-py on GitHub](https://github.com/executablebooks/markdown-it-py)
 
-## Seven color styles
+## Eight color styles
 
 Pick one from the palette button in the top right, or cycle with <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>S</kbd>. Your choice is remembered.
 
 | Style      | Mood                    | Typeface |
 |:-----------|:------------------------|:--------:|
 | Aurora     | Midnight, northern lights | Sans   |
+| Dark       | Plain graphite, no tint | Sans     |
 | Paper      | Editorial, ivory stock  | Serif    |
 | Sepia      | Old library, warm lamp  | Serif    |
 | Glacier    | Cool arctic slate       | Sans     |
