@@ -1,0 +1,7 @@
+# pyglet 2.1 changed several APIs Mercy relies on, so stay on the 2.0 series.
+pyglet>=2.0.17,<2.1
+markdown-it-py>=3.0,<4
+requests>=2.28
+pygments>=2.15
+# Decodes images off the UI thread (strongly recommended; required for images on Windows).
+Pillow>=10
